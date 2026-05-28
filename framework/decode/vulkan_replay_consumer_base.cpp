@@ -2506,7 +2506,7 @@ void VulkanReplayConsumerBase::ProcessCreateInstanceDebugCallbackInfo(const Deco
 }
 
 void VulkanReplayConsumerBase::ProcessSwapchainFullScreenExclusiveInfo(
-    const Decoded_VkSwapchainCreateInfoKHR* swapchain_info)
+    const Decoded_VkSwapchainCreateInfoKHR* swapchain_info, VkExtent2D image_extent)
 {
     assert(swapchain_info != nullptr);
 
@@ -2531,6 +2531,39 @@ void VulkanReplayConsumerBase::ProcessSwapchainFullScreenExclusiveInfo(
         if (hmonitor != nullptr)
         {
             full_screen_info->hmonitor = hmonitor;
+
+            // Downgrade APPLICATION_CONTROLLED to DISALLOWED when the swapchain extent doesn't match
+            // the monitor's native resolution — FSE at non-native resolution usually fails or causes
+            // rendering artifacts and the app won't be calling Acquire anyway.
+            if (auto fse_info = graphics::vulkan_struct_get_pnext<VkSurfaceFullScreenExclusiveInfoEXT>(
+                    swapchain_info->decoded_value))
+            {
+                if (fse_info->fullScreenExclusive == VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT)
+                {
+                    MONITORINFO monitor_info = {};
+                    monitor_info.cbSize      = sizeof(monitor_info);
+                    if (GetMonitorInfo(hmonitor, &monitor_info))
+                    {
+                        uint32_t native_width =
+                            static_cast<uint32_t>(monitor_info.rcMonitor.right - monitor_info.rcMonitor.left);
+                        uint32_t native_height =
+                            static_cast<uint32_t>(monitor_info.rcMonitor.bottom - monitor_info.rcMonitor.top);
+
+                        if (image_extent.width != native_width || image_extent.height != native_height)
+                        {
+                            GFXRECON_LOG_WARNING(
+                                "vkCreateSwapchainKHR: swapchain extent (%u x %u) does not match native monitor "
+                                "resolution (%u x %u); downgrading VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT "
+                                "to VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT",
+                                image_extent.width,
+                                image_extent.height,
+                                native_width,
+                                native_height)
+                            fse_info->fullScreenExclusive = VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT;
+                        }
+                    }
+                }
+            }
         }
         else
         {
@@ -7875,7 +7908,7 @@ VkResult VulkanReplayConsumerBase::OverrideCreateSwapchainKHR(
             }
         }
 
-        ProcessSwapchainFullScreenExclusiveInfo(pCreateInfo->GetMetaStructPointer());
+        ProcessSwapchainFullScreenExclusiveInfo(pCreateInfo->GetMetaStructPointer(), modified_create_info.imageExtent);
 
         if (screenshot_handler_ != nullptr || options_.dumping_resources)
         {
