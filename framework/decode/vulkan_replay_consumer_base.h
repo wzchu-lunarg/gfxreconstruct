@@ -1805,8 +1805,7 @@ class VulkanReplayConsumerBase : public VulkanConsumer
 
     void ProcessCreateInstanceDebugCallbackInfo(const Decoded_VkInstanceCreateInfo* instance_info);
 
-    void ProcessSwapchainFullScreenExclusiveInfo(const Decoded_VkSwapchainCreateInfoKHR* swapchain_info,
-                                                 VkExtent2D                              image_extent);
+    void ProcessSwapchainFullScreenExclusiveInfo(const Decoded_VkSwapchainCreateInfoKHR* swapchain_info);
 
     void
     ProcessImportAndroidHardwareBufferInfo(const StructPointerDecoder<Decoded_VkMemoryAllocateInfo>* pAllocateInfo);
