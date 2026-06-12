@@ -1414,17 +1414,19 @@ void VulkanAddressReplacer::ProcessCmdBuildAccelerationStructuresKHR(
                 {
                     auto& instances = geometry->geometry.instances;
 
-                    // check if replacement is actually required
-                    if (address_remap(instances.data.deviceAddress))
+                    // Remap the instance buffer address (may be a no-op if capture == replay address).
+                    // Always collect BLAS reference locations regardless — the instance buffer address
+                    // matching does not imply the embedded BLAS device addresses also match.
+                    // run_compute_replace is a no-op when storage_bda_binary_ is empty.
+                    address_remap(instances.data.deviceAddress);
+
+                    // replace VkAccelerationStructureInstanceKHR::accelerationStructureReference inside buffer
+                    for (uint32_t k = 0; k < range_infos[j].primitiveCount; ++k)
                     {
-                        // replace VkAccelerationStructureInstanceKHR::accelerationStructureReference inside buffer
-                        for (uint32_t k = 0; k < range_infos[j].primitiveCount; ++k)
-                        {
-                            VkDeviceAddress accel_structure_reference =
-                                instances.data.deviceAddress + k * sizeof(VkAccelerationStructureInstanceKHR) +
-                                offsetof(VkAccelerationStructureInstanceKHR, accelerationStructureReference);
-                            addresses_to_replace.push_back(accel_structure_reference);
-                        }
+                        VkDeviceAddress accel_structure_reference =
+                            instances.data.deviceAddress + k * sizeof(VkAccelerationStructureInstanceKHR) +
+                            offsetof(VkAccelerationStructureInstanceKHR, accelerationStructureReference);
+                        addresses_to_replace.push_back(accel_structure_reference);
                     }
 
                     break;
