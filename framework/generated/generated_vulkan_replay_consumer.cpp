@@ -871,6 +871,10 @@ void VulkanReplayConsumer::Process_vkFreeCommandBuffers(
     RemovePoolHandles<VulkanCommandPoolInfo, VulkanCommandBufferInfo>(commandPool, pCommandBuffers, commandBufferCount, &CommonObjectInfoTable::GetVkCommandPoolInfo, &CommonObjectInfoTable::RemoveVkCommandBufferInfo);
 }
 
+int drawcall_num = 0;
+const uint32_t maxNumDrawCalls = 5; // Adjust based on your needs
+VkQueryPool queryPool;
+
 void VulkanReplayConsumer::Process_vkBeginCommandBuffer(
     const ApiCallInfo&                          call_info,
     VkResult                                    returnValue,
@@ -879,10 +883,19 @@ void VulkanReplayConsumer::Process_vkBeginCommandBuffer(
 {
     auto in_commandBuffer = GetObjectInfoTable().GetVkCommandBufferInfo(commandBuffer);
 
+    drawcall_num = 0;
+
     MapStructHandles(pBeginInfo->GetMetaStructPointer(), GetObjectInfoTable());
 
     VkResult replay_result = OverrideBeginCommandBuffer(GetDeviceTable(in_commandBuffer->handle)->BeginCommandBuffer, call_info.index, returnValue, in_commandBuffer, pBeginInfo);
     CheckResult("vkBeginCommandBuffer", returnValue, replay_result, call_info);
+
+    // Reset the timestamp query pool here: vkCmdResetQueryPool must be recorded
+    // outside of a render pass instance, so it cannot live next to the draw call.
+    if (queryPool != VK_NULL_HANDLE)
+    {
+        GetDeviceTable(in_commandBuffer->handle)->CmdResetQueryPool(in_commandBuffer->handle, queryPool, 0, maxNumDrawCalls * 2);
+    }
 }
 
 void VulkanReplayConsumer::Process_vkEndCommandBuffer(
@@ -1483,6 +1496,16 @@ void VulkanReplayConsumer::Process_vkCreatePipelineLayout(
     if (!pPipelineLayout->IsNull()) { pPipelineLayout->SetHandleLength(1); }
     VulkanPipelineLayoutInfo handle_info;
     pPipelineLayout->SetConsumerData(0, &handle_info);
+
+    VkQueryPoolCreateInfo queryPoolInfo = {};
+    queryPoolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    queryPoolInfo.queryCount = maxNumDrawCalls * 2; // Two timestamps per draw call (start and end)
+    VkResult result = GetDeviceTable(in_device->handle)->CreateQueryPool(in_device->handle, &queryPoolInfo, nullptr, &queryPool);
+    if (result != VK_SUCCESS) {
+      // Handle error
+       GFXRECON_LOG_INFO("Failed to create query pool");
+    }
 
     PushRecaptureHandleId(pPipelineLayout->GetPointer());
     VkResult replay_result = OverrideCreatePipelineLayout(GetDeviceTable(in_device->handle)->CreatePipelineLayout, returnValue, in_device, pCreateInfo, pAllocator, pPipelineLayout);
@@ -2185,7 +2208,18 @@ void VulkanReplayConsumer::Process_vkCmdDraw(
 {
     VkCommandBuffer in_commandBuffer = MapHandle<VulkanCommandBufferInfo>(commandBuffer, &CommonObjectInfoTable::GetVkCommandBufferInfo);
 
+    // Only instrument while there is room left in the query pool.
+    bool timestamped = (queryPool != VK_NULL_HANDLE) && (drawcall_num < maxNumDrawCalls);
+    if (timestamped)
+    {
+        GetDeviceTable(in_commandBuffer)->CmdWriteTimestamp(in_commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool, drawcall_num * 2); // Start timestamp
+    }
     GetDeviceTable(in_commandBuffer)->CmdDraw(in_commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
+    if (timestamped)
+    {
+        GetDeviceTable(in_commandBuffer)->CmdWriteTimestamp(in_commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, drawcall_num * 2 + 1); // End timestamp
+        ++drawcall_num;
+    }
 
     if (options_.dumping_resources)
     {
@@ -2204,7 +2238,18 @@ void VulkanReplayConsumer::Process_vkCmdDrawIndexed(
 {
     VkCommandBuffer in_commandBuffer = MapHandle<VulkanCommandBufferInfo>(commandBuffer, &CommonObjectInfoTable::GetVkCommandBufferInfo);
 
+    // Only instrument while there is room left in the query pool.
+    bool timestamped = (queryPool != VK_NULL_HANDLE) && (drawcall_num < maxNumDrawCalls);
+    if (timestamped)
+    {
+        GetDeviceTable(in_commandBuffer)->CmdWriteTimestamp(in_commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, queryPool, drawcall_num * 2); // Start timestamp
+    }
     GetDeviceTable(in_commandBuffer)->CmdDrawIndexed(in_commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+    if (timestamped)
+    {
+        GetDeviceTable(in_commandBuffer)->CmdWriteTimestamp(in_commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queryPool, drawcall_num * 2 + 1); // End timestamp
+        ++drawcall_num;
+    }
 
     if (options_.dumping_resources)
     {

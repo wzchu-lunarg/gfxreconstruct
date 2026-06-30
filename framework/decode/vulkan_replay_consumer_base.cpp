@@ -4326,6 +4326,10 @@ VkResult VulkanReplayConsumerBase::OverrideGetQueryPoolResults(PFN_vkGetQueryPoo
     return result;
 }
 
+extern int drawcall_num;
+extern VkQueryPool queryPool;
+extern const uint32_t maxNumDrawCalls;
+
 VkResult VulkanReplayConsumerBase::OverrideQueueSubmit(PFN_vkQueueSubmit                           func,
                                                        uint64_t                                    index,
                                                        VkResult                                    original_result,
@@ -4586,6 +4590,26 @@ VkResult VulkanReplayConsumerBase::OverrideQueueSubmit(PFN_vkQueueSubmit        
 
     application_->GetReplayEventSink()->QueueSubmitEnd(
         submit_index, queue_info->capture_id, event_result, completion_source);
+
+    if ((queryPool != VK_NULL_HANDLE) && (drawcall_num > 0))
+    {
+        std::vector<uint64_t> timestamps(drawcall_num * 2);
+        GetDeviceTable(queue_info->handle)->GetQueryPoolResults(device_info->handle,
+                              queryPool,
+                              0,
+                              drawcall_num * 2,
+                              timestamps.size() * sizeof(uint64_t),
+                              timestamps.data(),
+                              sizeof(uint64_t),
+                              VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+        // Calculate and print elapsed times for each draw call
+        for (uint32_t i = 0; i < drawcall_num; i++)
+        {
+            uint64_t elapsedTime = timestamps[i * 2 + 1] - timestamps[i * 2]; // End - Start
+            GFXRECON_LOG_INFO("Elapsed time for drawcall  %d is %" PRIu64 "", i, elapsedTime);
+        }
+    }
 
     return result;
 }
