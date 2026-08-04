@@ -243,7 +243,8 @@ void VulkanReplayFrameLoopConsumer::Process_vkCreateFence(const ApiCallInfo& cal
 
 void VulkanReplayFrameLoopConsumer::Process_vkDestroyFence(const ApiCallInfo& call_info, args::DestroyFence& args)
 {
-    if (allocatedLoopResources.contains(args.fence))
+    VulkanReplayFrameLoopConsumerBase::Process_vkDestroyFence(call_info, args);
+    if (GetObjectInfoTable().GetVkFenceInfo(args.fence) == nullptr)
     {
         if (per_device_fence_tracking_.contains(args.device))
         {
@@ -254,7 +255,6 @@ void VulkanReplayFrameLoopConsumer::Process_vkDestroyFence(const ApiCallInfo& ca
             t.initial_fence_states_.erase(args.fence);
         }
     }
-    VulkanReplayFrameLoopConsumerBase::Process_vkDestroyFence(call_info, args);
 }
 
 void VulkanReplayFrameLoopConsumer::TrackFenceState(format::HandleId device, format::HandleId fence)
