@@ -555,6 +555,7 @@ void VulkanReplayFrameLoopConsumer::StartLooping()
 {
     WaitDevicesIdle();
     GFXRECON_LOG_DEBUG("VulkanReplayFrameLoopConsumer::StartLooping()");
+    CalculateShadowMemoryBudgets();
     TrackFenceStates();
     TrackEventStates();
     TrackImageStates();
@@ -617,6 +618,49 @@ void VulkanReplayFrameLoopConsumer::TrackSemaphoreStates()
     });
 }
 
+static VkDeviceSize GetShadowMemoryBudget(const VulkanPhysicalDeviceInfo& physical_device_info)
+{
+    const VkPhysicalDeviceMemoryProperties& memory_properties =
+        ((physical_device_info.replay_device_info != nullptr) &&
+         physical_device_info.replay_device_info->memory_properties.has_value())
+            ? physical_device_info.replay_device_info->memory_properties.value()
+            : physical_device_info.capture_memory_properties;
+
+    const uint32_t memory_type_index =
+        graphics::GetMemoryTypeIndex(memory_properties, ~0U, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memory_type_index == std::numeric_limits<uint32_t>::max())
+    {
+        return 0;
+    }
+
+    const uint32_t heap_index = memory_properties.memoryTypes[memory_type_index].heapIndex;
+
+    return static_cast<VkDeviceSize>(static_cast<double>(memory_properties.memoryHeaps[heap_index].size) *
+                                     kShadowMemoryBudgetFraction);
+}
+
+void VulkanReplayFrameLoopConsumer::CalculateShadowMemoryBudgets()
+{
+    per_device_shadow_budget_.clear();
+
+    CommonObjectInfoTable& object_table = GetObjectInfoTable();
+
+    object_table.VisitVkDeviceInfo([this, &object_table](const VulkanDeviceInfo* device_info) {
+        const VulkanPhysicalDeviceInfo* physical_device_info =
+            object_table.GetVkPhysicalDeviceInfo(device_info->parent_id);
+
+        const VkDeviceSize budget =
+            (physical_device_info != nullptr) ? GetShadowMemoryBudget(*physical_device_info) : 0;
+
+        GFXRECON_LOG_DEBUG("CalculateShadowMemoryBudgets: Shadow copies on device %" PRIu64
+                           " may allocate up to %" PRIu64 " bytes.",
+                           device_info->capture_id,
+                           budget);
+
+        per_device_shadow_budget_[device_info->capture_id] = budget;
+    });
+}
+
 VulkanReplayFrameLoopConsumer::BufferTracking& VulkanReplayFrameLoopConsumer::GetBufferTracking(format::HandleId device)
 {
     auto it = per_device_buffer_tracking_.find(device);
@@ -673,7 +717,7 @@ void VulkanReplayFrameLoopConsumer::RecordBufferStates()
 
     for (const auto& [device_id, buffer_ids] : device_buffers)
     {
-        GetBufferTracking(device_id).RecordInitialState(buffer_ids);
+        GetBufferTracking(device_id).RecordInitialState(buffer_ids, per_device_shadow_budget_[device_id]);
     }
 }
 
@@ -688,7 +732,8 @@ void VulkanReplayFrameLoopConsumer::FixupDeviceBuffers(format::HandleId device)
     it->second.Restore();
 }
 
-void VulkanReplayFrameLoopConsumer::BufferTracking::RecordInitialState(const std::vector<format::HandleId>& buffer_ids)
+void VulkanReplayFrameLoopConsumer::BufferTracking::RecordInitialState(const std::vector<format::HandleId>& buffer_ids,
+                                                                       VkDeviceSize&                        budget)
 {
     if (allocator_ == nullptr || buffer_ids.empty())
     {
@@ -754,6 +799,16 @@ void VulkanReplayFrameLoopConsumer::BufferTracking::RecordInitialState(const std
             allocator_->DestroyBufferDirect(shadow.buffer, nullptr, shadow.alloc_data);
             continue;
         }
+
+        if (mem_reqs.size > budget)
+        {
+            GFXRECON_LOG_WARNING_ONCE("Shadow copies have taken their share of device memory; the contents of the "
+                                      "remaining resources will not be restored across loop repetitions.");
+            allocator_->DestroyBufferDirect(shadow.buffer, nullptr, shadow.alloc_data);
+            continue;
+        }
+
+        budget -= mem_reqs.size;
 
         VkMemoryAllocateInfo alloc_info = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
         alloc_info.allocationSize       = mem_reqs.size;
@@ -1694,7 +1749,8 @@ void VulkanReplayFrameLoopConsumer::TrackImageStates()
 
     for (const auto& [device_id, image_ids] : device_images)
     {
-        GetImageTracking(device_id).RecordInitialState(image_ids, device_restorable_images[device_id]);
+        GetImageTracking(device_id).RecordInitialState(
+            image_ids, device_restorable_images[device_id], per_device_shadow_budget_[device_id]);
     }
 }
 
@@ -1731,7 +1787,8 @@ void VulkanReplayFrameLoopConsumer::ResetImageTracking(format::HandleId device)
 // Creates the device-local image that an image's contents are snapshotted into, and binds memory to it.
 bool VulkanReplayFrameLoopConsumer::ImageTracking::CreateShadowImage(format::HandleId       image_id,
                                                                      const VulkanImageInfo* image_info,
-                                                                     ImageState&            state)
+                                                                     ImageState&            state,
+                                                                     VkDeviceSize&          budget)
 {
     VulkanDeviceInfo* device_info = object_table_.GetVkDeviceInfo(device_id_);
     GFXRECON_ASSERT(device_info != nullptr);
@@ -1775,6 +1832,15 @@ bool VulkanReplayFrameLoopConsumer::ImageTracking::CreateShadowImage(format::Han
                              image_id);
         return false;
     }
+
+    if (mem_reqs.size > budget)
+    {
+        GFXRECON_LOG_WARNING_ONCE("Shadow copies have taken their share of device memory; the contents of the "
+                                  "remaining resources will not be restored across loop repetitions.");
+        return false;
+    }
+
+    budget -= mem_reqs.size;
 
     VkMemoryAllocateInfo alloc_info = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
     alloc_info.allocationSize       = mem_reqs.size;
@@ -1832,7 +1898,9 @@ void VulkanReplayFrameLoopConsumer::ImageTracking::DestroyShadowImage(ImageState
 }
 
 void VulkanReplayFrameLoopConsumer::ImageTracking::RecordInitialState(
-    const std::vector<format::HandleId>& image_ids, const std::vector<format::HandleId>& restorable_image_ids)
+    const std::vector<format::HandleId>& image_ids,
+    const std::vector<format::HandleId>& restorable_image_ids,
+    VkDeviceSize&                        budget)
 {
     restore_commands_ = {};
 
@@ -1889,7 +1957,7 @@ void VulkanReplayFrameLoopConsumer::ImageTracking::RecordInitialState(
 
         BuildImageCopyRegions(image_info, state.copyable_ranges, state.copy_regions);
 
-        if (!CreateShadowImage(image_id, image_info, state))
+        if (!CreateShadowImage(image_id, image_info, state, budget))
         {
             DestroyShadowImage(state);
             continue;

@@ -31,6 +31,8 @@
 GFXRECON_BEGIN_NAMESPACE(gfxrecon)
 GFXRECON_BEGIN_NAMESPACE(decode)
 
+constexpr double kShadowMemoryBudgetFraction = 0.25;
+
 class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
 {
   public:
@@ -174,6 +176,8 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
     SemaphoreTracking& GetSemaphoreTracking(format::HandleId device);
     void               TrackSemaphoreStates();
 
+    void CalculateShadowMemoryBudgets();
+
     /// Tracks a device-local copy of each buffer's contents at the start of the loop range so that GPU
     /// writes made to the buffer during the loop can be undone before each repetition.
     struct BufferTracking
@@ -197,7 +201,7 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
             VulkanResourceAllocator::MemoryData   mem_data{ 0 };
         };
 
-        void RecordInitialState(const std::vector<format::HandleId>& buffer_ids);
+        void RecordInitialState(const std::vector<format::HandleId>& buffer_ids, VkDeviceSize& budget);
         void Restore();
         void DestroyShadowBuffers();
 
@@ -264,13 +268,17 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
         };
 
         void RecordInitialState(const std::vector<format::HandleId>& image_ids,
-                                const std::vector<format::HandleId>& restorable_image_ids);
+                                const std::vector<format::HandleId>& restorable_image_ids,
+                                VkDeviceSize&                        budget);
 
         void Restore(format::HandleId queue);
 
         void DestroyShadowImages();
 
-        bool CreateShadowImage(format::HandleId image_id, const VulkanImageInfo* image_info, ImageState& state);
+        bool CreateShadowImage(format::HandleId       image_id,
+                               const VulkanImageInfo* image_info,
+                               ImageState&            state,
+                               VkDeviceSize&          budget);
         void DestroyShadowImage(ImageState& state);
 
         void BuildRestoreCommands();
@@ -311,6 +319,8 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
 
     std::unordered_set<format::HandleId>                host_visible_events_;
     std::unordered_map<format::HandleId, EventTracking> per_device_event_tracking_;
+
+    std::unordered_map<format::HandleId, VkDeviceSize> per_device_shadow_budget_;
 
     std::unordered_map<format::HandleId, BufferTracking> per_device_buffer_tracking_;
 
