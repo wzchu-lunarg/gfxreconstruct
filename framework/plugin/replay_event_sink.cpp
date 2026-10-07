@@ -154,6 +154,23 @@ void ReplayEventSink::WaitEnd()
     EmitWaitEnd(event);
 }
 
+void ReplayEventSink::WarmupBegin(uint32_t warm_up_load)
+{
+    GfxrReplayWarmupBeginEvent event = {};
+    event.header                     = CreateEventHeader(GFXR_REPLAY_EVENT_WARMUP_BEGIN);
+    event.warm_up_load               = warm_up_load;
+
+    EmitWarmupBegin(event);
+}
+
+void ReplayEventSink::WarmupEnd()
+{
+    GfxrReplayWarmupEndEvent event = {};
+    event.header                   = CreateEventHeader(GFXR_REPLAY_EVENT_WARMUP_END);
+
+    EmitWarmupEnd(event);
+}
+
 PluginReplayEventSink::PluginReplayEventSink(util::platform::LibraryHandle library,
                                              GfxrReplayPluginV1*           plugin,
                                              uint32_t                      abi_version,
@@ -216,6 +233,16 @@ void PluginReplayEventSink::EmitWaitBegin(const GfxrReplayWaitBeginEvent& event)
 }
 
 void PluginReplayEventSink::EmitWaitEnd(const GfxrReplayWaitEndEvent& event)
+{
+    Forward(event.header);
+}
+
+void PluginReplayEventSink::EmitWarmupBegin(const GfxrReplayWarmupBeginEvent& event)
+{
+    Forward(event.header);
+}
+
+void PluginReplayEventSink::EmitWarmupEnd(const GfxrReplayWarmupEndEvent& event)
 {
     Forward(event.header);
 }

@@ -4896,9 +4896,15 @@ VkResult VulkanReplayConsumerBase::OverrideQueueSubmit(PFN_vkQueueSubmit        
     if (options_.frame_warm_up_load != 0 && !fps_info_->IsFirstSubmitDone())
     {
         auto& frame_warm_up = GetDeviceFrameWarmUp(device_info);
-        plan.Push(0, [&frame_warm_up](const std::span<graphics::VulkanSemaphore> wait_semaphores) {
-            return frame_warm_up.WarmUp(wait_semaphores);
-        });
+        auto* event_sink    = application_->GetReplayEventSink();
+        plan.Push(0,
+                  [&frame_warm_up, event_sink, warm_up_load = options_.frame_warm_up_load](
+                      const std::span<graphics::VulkanSemaphore> wait_semaphores) {
+                      event_sink->WarmupBegin(warm_up_load);
+                      graphics::VulkanSemaphore semaphore = frame_warm_up.WarmUp(wait_semaphores);
+                      event_sink->WarmupEnd();
+                      return semaphore;
+                  });
     }
 
     if (UseAddressReplacement(device_info) && submit_info_data != nullptr)
@@ -5175,9 +5181,15 @@ VkResult VulkanReplayConsumerBase::OverrideQueueSubmit2(PFN_vkQueueSubmit2      
     if (options_.frame_warm_up_load != 0 && !fps_info_->IsFirstSubmitDone())
     {
         auto& frame_warm_up = GetDeviceFrameWarmUp(device_info);
-        plan.Push(0, [&frame_warm_up](const std::span<graphics::VulkanSemaphore> wait_semaphores) {
-            return frame_warm_up.WarmUp(wait_semaphores);
-        });
+        auto* event_sink    = application_->GetReplayEventSink();
+        plan.Push(0,
+                  [&frame_warm_up, event_sink, warm_up_load = options_.frame_warm_up_load](
+                      const std::span<graphics::VulkanSemaphore> wait_semaphores) {
+                      event_sink->WarmupBegin(warm_up_load);
+                      graphics::VulkanSemaphore semaphore = frame_warm_up.WarmUp(wait_semaphores);
+                      event_sink->WarmupEnd();
+                      return semaphore;
+                  });
     }
 
     if (UseAddressReplacement(device_info) && submit_info_data != nullptr)

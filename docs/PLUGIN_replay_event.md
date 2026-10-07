@@ -111,6 +111,8 @@ The v1 event set and emission points are fixed as follows:
 | `StateSetupEnd` | Immediately when state setup ends | If not replaying a trimmed capture | No fields |
 | `WaitBegin` | Immediately before replay sleeps for `--wait-before-first-submit` or `--wait-before-frame` | If neither option is set, or the requested delay has already elapsed | `timestamp_ns`, `frame_index`, `requested_duration_ms` |
 | `WaitEnd` | Immediately after that sleep returns | If the matching `WaitBegin` was not emitted | `timestamp_ns`, `frame_index` |
+| `WarmupBegin` | Immediately before replay submits the `--frame-warm-up-load` compute dispatch for a frame | If `--frame-warm-up-load` is not set | `timestamp_ns`, `frame_index`, `warm_up_load` |
+| `WarmupEnd` | Immediately after that warm-up submit returns | If the matching `WarmupBegin` was not emitted | `timestamp_ns`, `frame_index` |
 
 For v1, every attempted replay submit emits `QueueSubmitBegin` followed by exactly one `QueueSubmitEnd`. The completion event reports whether replay stopped at submit return or at queue-wait-idle completion point, and it carries the associated `VkResult`.
 
@@ -187,6 +189,18 @@ This event is intended for:
 ### WaitEnd
 
 `WaitEnd` is emitted exactly once for each `WaitBegin`, immediately after the sleep returns.
+
+### WarmupBegin
+
+`WarmupBegin` is emitted immediately before replay submits the synthetic compute dispatch that `--frame-warm-up-load` requests. That dispatch runs once per replayed frame, before the frame's first queue submit, to ramp GPU clocks before the frame's real work.
+
+It is a replay CPU-side event. It marks the submit of the warm-up work, not its completion on the GPU.
+
+`warm_up_load` carries the `--frame-warm-up-load` value replay is dispatching for, so a plugin can correlate the measured warm-up cost with the requested load.
+
+### WarmupEnd
+
+`WarmupEnd` is emitted exactly once for each `WarmupBegin`, immediately after the warm-up submit returns.
 
 ## Indexing and Sentinel Values
 
@@ -301,6 +315,8 @@ typedef enum GfxrReplayEventType {
     GFXR_REPLAY_EVENT_STATE_SETUP_END = 6,
     GFXR_REPLAY_EVENT_WAIT_BEGIN = 7,
     GFXR_REPLAY_EVENT_WAIT_END = 8,
+    GFXR_REPLAY_EVENT_WARMUP_BEGIN = 9,
+    GFXR_REPLAY_EVENT_WARMUP_END = 10,
 } GfxrReplayEventType;
 
 typedef enum GfxrReplayPluginResult {
@@ -364,6 +380,16 @@ typedef struct GfxrReplayWaitBeginEvent {
 typedef struct GfxrReplayWaitEndEvent {
     GfxrReplayEventHeader header;
 } GfxrReplayWaitEndEvent;
+
+typedef struct GfxrReplayWarmupBeginEvent {
+    GfxrReplayEventHeader header;
+    uint32_t warm_up_load;
+    uint32_t reserved;
+} GfxrReplayWarmupBeginEvent;
+
+typedef struct GfxrReplayWarmupEndEvent {
+    GfxrReplayEventHeader header;
+} GfxrReplayWarmupEndEvent;
 
 typedef struct GfxrReplayPluginV1 {
     uint32_t abi_version;
@@ -480,6 +506,7 @@ To add an event type, do these steps:
 | 1 | `QueueSubmitBegin`, `QueueSubmitEnd`, `FrameBegin`, `FrameEnd` | first public version |
 | 2 | `StateSetupBegin`, `StateSetupEnd` | state setup markers |
 | 3 | `WaitBegin`, `WaitEnd` | replay-requested delay markers |
+| 4 | `WarmupBegin`, `WarmupEnd` | frame warm-up dispatch markers |
 
 Add a row for each increase of `GFXR_REPLAY_PLUGIN_ABI_VERSION`.
 

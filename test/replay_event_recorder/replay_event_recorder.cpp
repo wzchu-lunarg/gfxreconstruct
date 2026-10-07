@@ -111,11 +111,20 @@ static void append_payload(FILE* output, const GfxrReplayEventHeader* event)
             break;
         }
 
+        case GFXR_REPLAY_EVENT_WARMUP_BEGIN:
+        {
+            const GfxrReplayWarmupBeginEvent* warmup_begin = (const GfxrReplayWarmupBeginEvent*)event;
+
+            append_unsigned(output, "warm_up_load", warmup_begin->warm_up_load);
+            break;
+        }
+
         // These carry nothing beyond the header
         case GFXR_REPLAY_EVENT_FRAME_BEGIN:
         case GFXR_REPLAY_EVENT_STATE_SETUP_BEGIN:
         case GFXR_REPLAY_EVENT_STATE_SETUP_END:
         case GFXR_REPLAY_EVENT_WAIT_END:
+        case GFXR_REPLAY_EVENT_WARMUP_END:
             break;
 
         // Unknown event types such as from a newer ABI

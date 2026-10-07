@@ -34,7 +34,7 @@
 #define GFXR_REPLAY_PLUGIN_EXPORT
 #endif
 
-#define GFXR_REPLAY_PLUGIN_ABI_VERSION 3u
+#define GFXR_REPLAY_PLUGIN_ABI_VERSION 4u
 #define GFXR_REPLAY_PLUGIN_ABI_MIN_VERSION 1u
 #define GFXR_REPLAY_INVALID_SUBMIT_INDEX UINT64_MAX
 #define GFXR_REPLAY_PLUGIN_FACTORY_NAME "gfxrCreateReplayPluginV1"
@@ -54,6 +54,10 @@ typedef enum GfxrReplayEventType
     // Provided by ABI v3
     GFXR_REPLAY_EVENT_WAIT_BEGIN = 7,
     GFXR_REPLAY_EVENT_WAIT_END   = 8,
+
+    // Provided by ABI v4
+    GFXR_REPLAY_EVENT_WARMUP_BEGIN = 9,
+    GFXR_REPLAY_EVENT_WARMUP_END   = 10,
 } GfxrReplayEventType;
 
 static_assert(sizeof(GfxrReplayEventType) == sizeof(uint32_t));
@@ -147,6 +151,23 @@ typedef struct GfxrReplayWaitEndEvent
 } GfxrReplayWaitEndEvent;
 
 static_assert(sizeof(GfxrReplayWaitEndEvent) == 32);
+
+typedef struct GfxrReplayWarmupBeginEvent
+{
+    GfxrReplayEventHeader header;
+    /* The value of --frame-warm-up-load that replay is dispatching for. */
+    uint32_t warm_up_load;
+    uint32_t reserved;
+} GfxrReplayWarmupBeginEvent;
+
+static_assert(sizeof(GfxrReplayWarmupBeginEvent) == 40);
+
+typedef struct GfxrReplayWarmupEndEvent
+{
+    GfxrReplayEventHeader header;
+} GfxrReplayWarmupEndEvent;
+
+static_assert(sizeof(GfxrReplayWarmupEndEvent) == 32);
 
 typedef struct GfxrReplayPluginV1
 {
