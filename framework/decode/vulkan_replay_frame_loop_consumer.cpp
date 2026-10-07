@@ -1033,19 +1033,15 @@ void VulkanReplayFrameLoopConsumer::Process_vkDestroyDescriptorPool(const ApiCal
     }
 }
 
-void VulkanReplayFrameLoopConsumer::Process_vkBeginCommandBuffer(const ApiCallInfo&        call_info,
-                                                                 args::BeginCommandBuffer& args)
+void VulkanReplayFrameLoopConsumer::InjectQueryPoolResets(VulkanCommandBufferInfo* command_buffer_info)
 {
-    VulkanReplayConsumer::Process_vkBeginCommandBuffer(call_info, args);
+    GFXRECON_ASSERT(command_buffer_info != nullptr);
 
-    if (frame_loop_info_.IsLooping())
-    {
-        // Record query pool reset commands
-        VulkanCommandBufferInfo* cb_info       = GetObjectInfoTable().GetVkCommandBufferInfo(args.commandBuffer);
-        format::HandleId         device        = cb_info->parent_id;
-        VkDevice                 replay_device = GetObjectInfoTable().GetVkDeviceInfo(device)->handle;
-        GFXRECON_ASSERT(replay_device != 0);
-        GetObjectInfoTable().VisitVkQueryPoolInfo([this, replay_device, cb_info](const VulkanQueryPoolInfo* info) {
+    format::HandleId device        = command_buffer_info->parent_id;
+    VkDevice         replay_device = GetObjectInfoTable().GetVkDeviceInfo(device)->handle;
+    GFXRECON_ASSERT(replay_device != 0);
+    GetObjectInfoTable().VisitVkQueryPoolInfo(
+        [this, replay_device, command_buffer_info](const VulkanQueryPoolInfo* info) {
             GFXRECON_ASSERT(query_pool_sizes_.contains(info->capture_id));
             const graphics::VulkanDeviceTable* device_table = GetDeviceTable(replay_device);
             GFXRECON_ASSERT(device_table != nullptr);
@@ -1053,11 +1049,64 @@ void VulkanReplayFrameLoopConsumer::Process_vkBeginCommandBuffer(const ApiCallIn
             uint32_t    pool_size   = query_pool_sizes_[info->capture_id];
             GFXRECON_LOG_DEBUG(
                 "Resetting pool 0x%" PRIx64 " (replay time handle == 0x%" PRIx64 ")", info->handle, info->capture_id);
-            device_table->CmdResetQueryPool(cb_info->handle, pool_handle, 0, pool_size);
+            device_table->CmdResetQueryPool(command_buffer_info->handle, pool_handle, 0, pool_size);
 
             // keep tracked query availability in sync with the injected reset
-            cb_info->recorded_query_ops.push_back({ info->capture_id, 0, pool_size, false });
+            command_buffer_info->recorded_query_ops.push_back({ info->capture_id, 0, pool_size, false });
         });
+}
+
+void VulkanReplayFrameLoopConsumer::Process_vkBeginCommandBuffer(const ApiCallInfo&        call_info,
+                                                                 args::BeginCommandBuffer& args)
+{
+    VulkanReplayConsumer::Process_vkBeginCommandBuffer(call_info, args);
+
+    if (frame_loop_info_.IsLoadingTrimState())
+    {
+        // A command buffer the state block leaves recording has its commands, its end and its submit
+        // inside the loop range, but not its begin.  Remember how it was begun so that each repetition
+        // can begin it again; see FixupDeviceCommandBuffers().
+        const VkCommandBufferBeginInfo* begin_info = args.pBeginInfo.GetPointer();
+        if (begin_info == nullptr)
+        {
+            return;
+        }
+
+        if (begin_info->pInheritanceInfo != nullptr)
+        {
+            // Secondary command buffers are executed through vkCmdExecuteCommands rather than submitted,
+            // and their inheritance state is not reproduced here.
+            GFXRECON_LOG_WARNING("Command buffer %" PRIu64 " inherits render pass state and is left recording by the "
+                                 "trim state block; it will not be restarted on loop repetitions.",
+                                 args.commandBuffer);
+            return;
+        }
+
+        if (begin_info->pNext != nullptr)
+        {
+            GFXRECON_LOG_WARNING("Discarding the pNext chain of vkBeginCommandBuffer for command buffer %" PRIu64
+                                 " when restarting it on loop repetitions.",
+                                 args.commandBuffer);
+        }
+
+        straddling_command_buffers_[args.commandBuffer] = begin_info->flags;
+    }
+
+    if (frame_loop_info_.IsLooping())
+    {
+        InjectQueryPoolResets(GetObjectInfoTable().GetVkCommandBufferInfo(args.commandBuffer));
+    }
+}
+
+void VulkanReplayFrameLoopConsumer::Process_vkEndCommandBuffer(const ApiCallInfo&      call_info,
+                                                               args::EndCommandBuffer& args)
+{
+    VulkanReplayConsumer::Process_vkEndCommandBuffer(call_info, args);
+
+    if (frame_loop_info_.IsLoadingTrimState())
+    {
+        // Begun and ended before the loop range starts, so it does not straddle the boundary.
+        straddling_command_buffers_.erase(args.commandBuffer);
     }
 }
 
@@ -2215,6 +2264,37 @@ void VulkanReplayFrameLoopConsumer::ImageTracking::DestroyShadowImages()
     restore_commands_ = {};
 }
 
+void VulkanReplayFrameLoopConsumer::FixupDeviceCommandBuffers(format::HandleId device)
+{
+    VulkanObjectInfoTable&             table        = GetObjectInfoTable();
+    VkDevice                           vk_device    = table.GetVkDeviceInfo(device)->handle;
+    const graphics::VulkanDeviceTable* device_table = GetDeviceTable(vk_device);
+    GFXRECON_ASSERT(device_table != nullptr);
+
+    for (const auto& [command_buffer_id, usage_flags] : straddling_command_buffers_)
+    {
+        VulkanCommandBufferInfo* command_buffer_info = table.GetVkCommandBufferInfo(command_buffer_id);
+        if ((command_buffer_info == nullptr) || (command_buffer_info->parent_id != device))
+        {
+            continue;
+        }
+
+        // Beginning the command buffer again implicitly resets it, discarding the recording the previous
+        // repetition left behind.  Nothing is lost: everything recorded into it belongs to the loop range,
+        // because the state block does no more than begin it.
+        ClearCommandBufferInfo(command_buffer_info);
+
+        VkCommandBufferBeginInfo begin_info = {};
+        begin_info.sType                    = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags                    = usage_flags;
+
+        VkResult result = device_table->BeginCommandBuffer(command_buffer_info->handle, &begin_info);
+        CHECK_VK_RESULT(result, "vkBeginCommandBuffer");
+
+        InjectQueryPoolResets(command_buffer_info);
+    }
+}
+
 void VulkanReplayFrameLoopConsumer::FixupDeviceObjects(format::HandleId device, format::HandleId queue)
 {
     if (!frame_loop_info_.IsLooping() || frame_loop_info_.IsFinalIteration())
@@ -2226,6 +2306,7 @@ void VulkanReplayFrameLoopConsumer::FixupDeviceObjects(format::HandleId device, 
     FixupDeviceFences(device, queue);
     FixupDeviceBuffers(device);
     GetSemaphoreTracking(device).FixupSemaphores(queue);
+    FixupDeviceCommandBuffers(device);
 }
 
 void VulkanReplayFrameLoopConsumer::Process_vkQueueBindSparse(const ApiCallInfo& call_info, args::QueueBindSparse& args)

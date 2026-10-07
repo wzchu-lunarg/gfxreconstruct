@@ -62,6 +62,8 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
 
     void Process_vkBeginCommandBuffer(const ApiCallInfo& call_info, args::BeginCommandBuffer& args) override;
 
+    void Process_vkEndCommandBuffer(const ApiCallInfo& call_info, args::EndCommandBuffer& args) override;
+
     void Process_vkDestroyDescriptorPool(const ApiCallInfo& call_info, args::DestroyDescriptorPool& args) override;
 
     void Process_vkResetDescriptorPool(const ApiCallInfo& call_info, args::ResetDescriptorPool& args) override;
@@ -130,6 +132,13 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
     void TrackEventState(format::HandleId device, format::HandleId event);
     void FixupDeviceEvents(format::HandleId device);
     void FixupDeviceObjects(format::HandleId device, format::HandleId queue);
+
+    /// Records a reset for every query pool into `command_buffer_info`, so that queries used inside the
+    /// loop range are available again on each repetition.
+    void InjectQueryPoolResets(VulkanCommandBufferInfo* command_buffer_info);
+
+    /// Re-issues vkBeginCommandBuffer for the command buffers in `straddling_command_buffers_`.
+    void FixupDeviceCommandBuffers(format::HandleId device);
 
     struct SemaphoreTracking
     {
@@ -400,6 +409,11 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
     std::unordered_map<format::HandleId, SemaphoreTracking> per_device_semaphore_tracking_;
 
     std::unordered_map<format::HandleId, uint32_t> query_pool_sizes_;
+
+    /// Command buffers that a trimmed capture leaves in the recording state when its state block ends.
+    /// Their commands, their end and their submit are all inside the loop range but their begin is not,
+    /// so each repetition has to begin them again.  Maps the command buffer to its usage flags.
+    std::unordered_map<format::HandleId, VkCommandBufferUsageFlags> straddling_command_buffers_;
 
     std::unordered_map<format::HandleId, FenceTracking> per_device_fence_tracking_;
 
