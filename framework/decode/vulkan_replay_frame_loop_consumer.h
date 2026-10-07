@@ -50,6 +50,8 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
 
     graphics::FrameLoopInfo& getFrameLoopInfo() override { return frame_loop_info_; }
 
+    virtual void ProcessStateBeginMarker(uint64_t frame_number) override;
+
     virtual void ProcessStateEndMarker(uint64_t frame_number) override;
 
     void Process_vkCreateBuffer(const ApiCallInfo& call_info, args::CreateBuffer& args) override;

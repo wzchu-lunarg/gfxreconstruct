@@ -44,17 +44,18 @@ class FrameLoopInfo
     bool AtLoopFrame(uint64_t frame_number) const { return frame_number == loop_frame_idx_; }
 
     /// Returns true if frame looping should be initialized.
-    bool ShouldStartFrameLooping(uint64_t frame_number) const { return AtLoopFrame(frame_number) && !IsLooping(); }
+    bool ShouldStartFrameLooping(uint64_t frame_number) const { return AtLoopFrame(frame_number) && !is_looping_; }
 
-    /// Returns true (for application use) if looping has started
-    bool IsLooping() const { return is_looping_; }
+    /// Returns true if the calls being replayed belong to the loop range.
+    /// Exclude loading trimmed states as part of looping.
+    bool IsLooping() const { return is_looping_ && !is_loading_trim_state_; }
 
     /// Returns true (for the consumer) if this is a repetition the loop frame, meaning that the loop frame
     /// has already been played at least once and we are currently replaying it again.
     bool IsRepetition() const { return is_repetition_; }
 
     /// Returns true if this is the first iteration of the loop range.
-    bool IsFirstIteration() const { return is_looping_ && !is_repetition_; }
+    bool IsFirstIteration() const { return IsLooping() && !is_repetition_; }
 
     /// Returns true if this is the final iteration of the loop range
     bool IsFinalIteration() const { return loop_iterations_ == 1; }
@@ -62,6 +63,10 @@ class FrameLoopInfo
     void     SetLooping(bool looping) { is_looping_ = looping; }
     uint32_t GetLoopFrame() const { return loop_frame_idx_; }
     uint32_t GetLoopIterations() const { return loop_iterations_; }
+
+    /// Set while the trim state block of a trimmed capture is being replayed.
+    void SetLoadingTrimState(bool loading) { is_loading_trim_state_ = loading; }
+    bool IsLoadingTrimState() const { return is_loading_trim_state_; }
 
     /// Decrements the number of loop iterations remaining.
     /// If the number of iterations is infinite, this has no effect.
@@ -76,6 +81,7 @@ class FrameLoopInfo
 
   private:
     bool     is_looping_{ false };
+    bool     is_loading_trim_state_{ false };
     bool     is_repetition_{ false };
     uint32_t loop_frame_idx_{ 0 };
     uint32_t loop_iterations_{ INFINITE_ITERATIONS };

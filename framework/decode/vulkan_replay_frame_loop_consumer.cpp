@@ -314,12 +314,22 @@ void VulkanReplayFrameLoopConsumer::SemaphoreTracking::FixupTimelineSemaphores(f
     }
 }
 
+void VulkanReplayFrameLoopConsumer::ProcessStateBeginMarker(uint64_t frame_number)
+{
+    VulkanReplayConsumer::ProcessStateBeginMarker(frame_number);
+
+    frame_loop_info_.SetLoadingTrimState(true);
+}
+
 void VulkanReplayFrameLoopConsumer::ProcessStateEndMarker(uint64_t frame_number)
 {
     VulkanReplayConsumer::ProcessStateEndMarker(frame_number);
 
+    const bool loaded_trim_state = frame_loop_info_.IsLoadingTrimState();
+    frame_loop_info_.SetLoadingTrimState(false);
+
     // If trim state had to be loaded, call StartLooping() again
-    if (frame_loop_info_.IsLooping())
+    if (loaded_trim_state && frame_loop_info_.IsLooping())
     {
         per_device_fence_tracking_.clear();
         per_device_event_tracking_.clear();
