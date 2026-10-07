@@ -284,6 +284,14 @@ VulkanFrameWarmUp::VulkanFrameWarmUp(const VulkanDeviceInfo*                    
                            util::ToString<VkResult>(result).c_str());
     }
 
+    VkFenceCreateInfo fence_info = { VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+    result                       = injected->CreateFence(device_, &fence_info, nullptr, &warmup_fence_);
+
+    if (result != VK_SUCCESS)
+    {
+        GFXRECON_LOG_FATAL("VulkanFrameWarmUp: Failed in vkCreateFence: %s.", util::ToString<VkResult>(result).c_str());
+    }
+
     VkCommandBufferAllocateInfo cmd_buf_alloc_info = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
     cmd_buf_alloc_info.commandPool                 = command_pool_;
     cmd_buf_alloc_info.level                       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -314,6 +322,10 @@ VulkanFrameWarmUp::~VulkanFrameWarmUp()
         if (semaphore_.semaphore != VK_NULL_HANDLE)
         {
             injected->DestroySemaphore(device_, semaphore_.semaphore, nullptr);
+        }
+        if (warmup_fence_ != VK_NULL_HANDLE)
+        {
+            injected->DestroyFence(device_, warmup_fence_, nullptr);
         }
         if (buffer_memory_ != VK_NULL_HANDLE)
         {
@@ -360,7 +372,8 @@ VulkanFrameWarmUp::VulkanFrameWarmUp(VulkanFrameWarmUp&& other) noexcept :
     shader_module_(other.shader_module_), descriptor_pool_(other.descriptor_pool_),
     descriptor_set_layout_(other.descriptor_set_layout_), descriptor_set_(other.descriptor_set_),
     pipeline_layout_(other.pipeline_layout_), pipeline_(other.pipeline_), buffer_(other.buffer_),
-    buffer_memory_(other.buffer_memory_), semaphore_(other.semaphore_)
+    buffer_memory_(other.buffer_memory_), semaphore_(other.semaphore_), warmup_fence_(other.warmup_fence_),
+    warm_up_pending_(other.warm_up_pending_)
 {
     other.injected_calls_.reset();
     other.device_                = VK_NULL_HANDLE;
@@ -376,6 +389,8 @@ VulkanFrameWarmUp::VulkanFrameWarmUp(VulkanFrameWarmUp&& other) noexcept :
     other.buffer_                = VK_NULL_HANDLE;
     other.buffer_memory_         = VK_NULL_HANDLE;
     other.semaphore_             = graphics::VulkanSemaphore(VK_NULL_HANDLE);
+    other.warmup_fence_          = VK_NULL_HANDLE;
+    other.warm_up_pending_       = false;
 }
 
 graphics::VulkanSemaphore VulkanFrameWarmUp::WarmUp(const std::span<graphics::VulkanSemaphore> wait_semaphores)
@@ -409,14 +424,74 @@ graphics::VulkanSemaphore VulkanFrameWarmUp::WarmUp(const std::span<graphics::Vu
     submit_info.signalSemaphoreCount = 1;
     submit_info.pSignalSemaphores    = &semaphore_.semaphore;
 
-    VkResult result = injected->QueueSubmit(queue_, 1, &submit_info, VK_NULL_HANDLE);
+    VkResult result = injected->QueueSubmit(queue_, 1, &submit_info, warmup_fence_);
 
     if (result != VK_SUCCESS)
     {
         GFXRECON_LOG_FATAL("VulkanFrameWarmUp: Failed in vkQueueSubmit: %s.", util::ToString<VkResult>(result).c_str());
     }
+    else
+    {
+        warm_up_pending_ = true;
+    }
 
     return semaphore_;
+}
+
+bool VulkanFrameWarmUp::RetireWarmUp(const graphics::VulkanInjectedDeviceCalls::Scope& injected)
+{
+    warm_up_pending_ = false;
+
+    VkResult result = injected->ResetFences(device_, 1, &warmup_fence_);
+    if (result != VK_SUCCESS)
+    {
+        GFXRECON_LOG_ERROR("VulkanFrameWarmUp: Failed in vkResetFences: %s.", util::ToString<VkResult>(result).c_str());
+    }
+
+    return true;
+}
+
+bool VulkanFrameWarmUp::PollWarmUpComplete()
+{
+    if (!warm_up_pending_)
+    {
+        return false;
+    }
+
+    auto injected = injected_calls_->Open();
+
+    VkResult result = injected->GetFenceStatus(device_, warmup_fence_);
+    if (result == VK_NOT_READY)
+    {
+        return false;
+    }
+
+    if (result != VK_SUCCESS)
+    {
+        GFXRECON_LOG_ERROR("VulkanFrameWarmUp: Failed in vkGetFenceStatus: %s.",
+                           util::ToString<VkResult>(result).c_str());
+    }
+
+    return RetireWarmUp(injected);
+}
+
+bool VulkanFrameWarmUp::WaitWarmUpComplete()
+{
+    if (!warm_up_pending_)
+    {
+        return false;
+    }
+
+    auto injected = injected_calls_->Open();
+
+    VkResult result = injected->WaitForFences(device_, 1, &warmup_fence_, VK_TRUE, UINT64_MAX);
+    if (result != VK_SUCCESS)
+    {
+        GFXRECON_LOG_ERROR("VulkanFrameWarmUp: Failed in vkWaitForFences: %s.",
+                           util::ToString<VkResult>(result).c_str());
+    }
+
+    return RetireWarmUp(injected);
 }
 
 GFXRECON_END_NAMESPACE(decode)

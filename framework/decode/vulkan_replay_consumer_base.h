@@ -102,6 +102,8 @@ class VulkanReplayConsumerBase : public VulkanConsumer
 
     virtual void ProcessStateEndMarker(uint64_t frame_number) override;
 
+    virtual void ProcessFrameEndMarker(uint64_t frame_number) override;
+
     virtual void ProcessDisplayMessageCommand(const std::string& message) override;
 
     virtual void
@@ -2087,6 +2089,19 @@ class VulkanReplayConsumerBase : public VulkanConsumer
     VulkanFrameWarmUp&                  GetDeviceFrameWarmUp(const VulkanDeviceInfo* device_info);
     VulkanCommandBufferUtil&            GetDeviceCommandBufferUtil(const VulkanDeviceInfo* device_info);
     VulkanSubmitJobExecutor&            GetDeviceSubmitJobExecutor(const VulkanDeviceInfo* device_info);
+
+    /// Non-blocking check of every device's outstanding frame warm-up, emitting WarmupEnd for each one that
+    /// has finished on the GPU since the last check. Called from the queue submits that follow the warm-up
+    /// within a frame, so that WarmupEnd lands close to the actual completion.
+    void PollFrameWarmUps();
+
+    /// Retires every device's outstanding frame warm-up and emits the matching WarmupEnd. Called at the
+    /// frame boundary, so that each WarmupEnd is paired within the frame that emitted its WarmupBegin.
+    void FlushFrameWarmUps();
+
+    /// FlushFrameWarmUps() for a single device, for the paths that already hold one: the device being
+    /// destroyed, and the guard before a frame submits its next warm-up.
+    void FlushFrameWarmUp(VulkanFrameWarmUp& frame_warm_up);
 
     /**
      * @brief   UseExtraDescriptorInfo returns true if additional information about layouts/descriptors/bindings etc.

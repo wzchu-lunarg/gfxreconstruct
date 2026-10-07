@@ -381,6 +381,8 @@ VulkanReplayConsumerBase::~VulkanReplayConsumerBase()
 
 void VulkanReplayConsumerBase::WaitDevicesIdle()
 {
+    FlushFrameWarmUps();
+
     object_info_table_->VisitVkDeviceInfo([this](const VulkanDeviceInfo* info) {
         assert(info != nullptr);
         VkDevice device = info->handle;
@@ -417,6 +419,13 @@ void VulkanReplayConsumerBase::ProcessStateEndMarker(uint64_t frame_number)
     }
 
     application_->GetReplayEventSink()->StateSetupEnd();
+}
+
+void VulkanReplayConsumerBase::ProcessFrameEndMarker(uint64_t frame_number)
+{
+    GFXRECON_UNREFERENCED_PARAMETER(frame_number);
+
+    FlushFrameWarmUps();
 }
 
 void VulkanReplayConsumerBase::ProcessDisplayMessageCommand(const std::string& message)
@@ -3893,7 +3902,11 @@ void VulkanReplayConsumerBase::OverrideDestroyDevice(
         swapchain_->CleanDeviceResources(device_info->handle, &device_table);
 
         // free frame warm up resources before the device is destroyed
-        device_frame_warmups_.erase(device_info);
+        if (auto it = device_frame_warmups_.find(device_info); it != device_frame_warmups_.end())
+        {
+            FlushFrameWarmUp(it->second);
+            device_frame_warmups_.erase(it);
+        }
 
         device_info->allocator->Destroy();
         func(device, GetAllocationCallbacks(pAllocator));
@@ -4844,6 +4857,9 @@ VkResult VulkanReplayConsumerBase::OverrideQueueSubmit(PFN_vkQueueSubmit        
                                                        StructPointerDecoder<Decoded_VkSubmitInfo>* pSubmits,
                                                        const VulkanFenceInfo*                      fence_info)
 {
+    // A warm-up submitted earlier may have already finished.
+    PollFrameWarmUps();
+
     options_.MaybeWaitBeforeFirstSubmit(application_->GetReplayEventSink());
     if (!fps_info_->IsFirstSubmitDone())
     {
@@ -4897,13 +4913,14 @@ VkResult VulkanReplayConsumerBase::OverrideQueueSubmit(PFN_vkQueueSubmit        
     {
         auto& frame_warm_up = GetDeviceFrameWarmUp(device_info);
         auto* event_sink    = application_->GetReplayEventSink();
+
+        FlushFrameWarmUp(frame_warm_up);
+
         plan.Push(0,
                   [&frame_warm_up, event_sink, warm_up_load = options_.frame_warm_up_load](
                       const std::span<graphics::VulkanSemaphore> wait_semaphores) {
                       event_sink->WarmupBegin(warm_up_load);
-                      graphics::VulkanSemaphore semaphore = frame_warm_up.WarmUp(wait_semaphores);
-                      event_sink->WarmupEnd();
-                      return semaphore;
+                      return frame_warm_up.WarmUp(wait_semaphores);
                   });
     }
 
@@ -5129,6 +5146,9 @@ VkResult VulkanReplayConsumerBase::OverrideQueueSubmit2(PFN_vkQueueSubmit2      
                                                         StructPointerDecoder<Decoded_VkSubmitInfo2>* pSubmits,
                                                         const VulkanFenceInfo*                       fence_info)
 {
+    // A warm-up submitted earlier may have already finished.
+    PollFrameWarmUps();
+
     options_.MaybeWaitBeforeFirstSubmit(application_->GetReplayEventSink());
     if (!fps_info_->IsFirstSubmitDone())
     {
@@ -5182,13 +5202,14 @@ VkResult VulkanReplayConsumerBase::OverrideQueueSubmit2(PFN_vkQueueSubmit2      
     {
         auto& frame_warm_up = GetDeviceFrameWarmUp(device_info);
         auto* event_sink    = application_->GetReplayEventSink();
+
+        FlushFrameWarmUp(frame_warm_up);
+
         plan.Push(0,
                   [&frame_warm_up, event_sink, warm_up_load = options_.frame_warm_up_load](
                       const std::span<graphics::VulkanSemaphore> wait_semaphores) {
                       event_sink->WarmupBegin(warm_up_load);
-                      graphics::VulkanSemaphore semaphore = frame_warm_up.WarmUp(wait_semaphores);
-                      event_sink->WarmupEnd();
-                      return semaphore;
+                      return frame_warm_up.WarmUp(wait_semaphores);
                   });
     }
 
@@ -9536,6 +9557,8 @@ VulkanReplayConsumerBase::OverrideQueuePresentKHR(PFN_vkQueuePresentKHR         
 {
     assert((queue_info != nullptr) && (pPresentInfo != nullptr) && !pPresentInfo->IsNull());
 
+    FlushFrameWarmUps();
+
     VkResult   result             = VK_SUCCESS;
     const auto present_info       = pPresentInfo->GetPointer();
     auto       present_info_data  = pPresentInfo->GetMetaStructPointer();
@@ -13003,6 +13026,34 @@ VulkanFrameWarmUp& VulkanReplayConsumerBase::GetDeviceFrameWarmUp(const VulkanDe
                                                          options_.frame_warm_up_load) });
     GFXRECON_ASSERT(success);
     return new_it->second;
+}
+
+void VulkanReplayConsumerBase::PollFrameWarmUps()
+{
+    for (auto& [device_info, frame_warm_up] : device_frame_warmups_)
+    {
+        if (frame_warm_up.PollWarmUpComplete())
+        {
+            application_->GetReplayEventSink()->WarmupEnd();
+        }
+    }
+}
+
+void VulkanReplayConsumerBase::FlushFrameWarmUps()
+{
+    for (auto& [device_info, frame_warm_up] : device_frame_warmups_)
+    {
+        FlushFrameWarmUp(frame_warm_up);
+    }
+}
+
+void VulkanReplayConsumerBase::FlushFrameWarmUp(VulkanFrameWarmUp& frame_warm_up)
+{
+    // Try the non blocking path first
+    if (frame_warm_up.PollWarmUpComplete() || frame_warm_up.WaitWarmUpComplete())
+    {
+        application_->GetReplayEventSink()->WarmupEnd();
+    }
 }
 
 VulkanCommandBufferUtil& VulkanReplayConsumerBase::GetDeviceCommandBufferUtil(const VulkanDeviceInfo* device_info)

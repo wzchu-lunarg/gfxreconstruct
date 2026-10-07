@@ -59,7 +59,14 @@ class VulkanFrameWarmUp
 
     graphics::VulkanSemaphore WarmUp(const std::span<graphics::VulkanSemaphore> wait_semaphores = {});
 
+    bool PollWarmUpComplete();
+
+    bool WaitWarmUpComplete();
+
   private:
+    // Resets fence for frame warmup.
+    bool RetireWarmUp(const graphics::VulkanInjectedDeviceCalls::Scope& injected);
+
     // Every device call this class makes is replay-injected. Empty only in the moved-from state.
     std::optional<graphics::VulkanInjectedDeviceCalls> injected_calls_;
 
@@ -79,6 +86,8 @@ class VulkanFrameWarmUp
     VkBuffer                  buffer_{ VK_NULL_HANDLE };
     VkDeviceMemory            buffer_memory_{ VK_NULL_HANDLE };
     graphics::VulkanSemaphore semaphore_{ VK_NULL_HANDLE };
+    VkFence                   warmup_fence_{ VK_NULL_HANDLE };
+    bool                      warm_up_pending_{ false };
 };
 
 using VulkanPerDeviceFrameWarmUp = std::unordered_map<const VulkanDeviceInfo*, VulkanFrameWarmUp>;

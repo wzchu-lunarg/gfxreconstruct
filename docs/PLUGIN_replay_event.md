@@ -112,7 +112,7 @@ The v1 event set and emission points are fixed as follows:
 | `WaitBegin` | Immediately before replay sleeps for `--wait-before-first-submit` or `--wait-before-frame` | If neither option is set, or the requested delay has already elapsed | `timestamp_ns`, `frame_index`, `requested_duration_ms` |
 | `WaitEnd` | Immediately after that sleep returns | If the matching `WaitBegin` was not emitted | `timestamp_ns`, `frame_index` |
 | `WarmupBegin` | Immediately before replay submits the `--frame-warm-up-load` compute dispatch for a frame | If `--frame-warm-up-load` is not set | `timestamp_ns`, `frame_index`, `warm_up_load` |
-| `WarmupEnd` | Immediately after that warm-up submit returns | If the matching `WarmupBegin` was not emitted | `timestamp_ns`, `frame_index` |
+| `WarmupEnd` | When replay observes the warm-up finished on the GPU, by polling the fence attached to the warm-up submit | If the matching `WarmupBegin` was not emitted | `timestamp_ns`, `frame_index` |
 
 For v1, every attempted replay submit emits `QueueSubmitBegin` followed by exactly one `QueueSubmitEnd`. The completion event reports whether replay stopped at submit return or at queue-wait-idle completion point, and it carries the associated `VkResult`.
 
@@ -200,7 +200,33 @@ It is a replay CPU-side event. It marks the submit of the warm-up work, not its 
 
 ### WarmupEnd
 
-`WarmupEnd` is emitted exactly once for each `WarmupBegin`, immediately after the warm-up submit returns.
+`WarmupEnd` is emitted exactly once for each `WarmupBegin`, and it reports GPU completion rather than the
+return of the warm-up submit.
+
+Replay attaches a fence to the warm-up submit and checks it with `vkGetFenceStatus` at the queue submits
+that follow the warm-up within the frame, and once more at the frame boundary. The event is emitted at the
+first check that observes the fence signaled. Replay never spins on the fence, because the frame's own
+submits are handed to the driver while the warm-up is still running, and blocking for the warm-up would add
+a CPU stall that replay does not otherwise have.
+
+The consequence is that `timestamp_ns` is an **upper bound** on GPU completion, not the completion instant.
+A consumer that needs the instant itself should not use this event; timestamp queries written around the
+warm-up dispatch are the appropriate mechanism.
+
+A consumer that needs the lower bound as well can derive it from the event stream, because replay checks
+the fence at a point the stream already names. The rule is:
+
+* the lower bound is the `QueueSubmitBegin` that most recently precedes `WarmupEnd` within the frame
+* **except** the frame's first `QueueSubmitBegin`, whose check runs before that same submit dispatches the
+  warm-up, and so cannot have observed it
+* when no `QueueSubmitBegin` qualifies, the lower bound is `WarmupBegin`
+
+So for a frame whose warm-up is followed by a single submit, the bound is the whole `WarmupBegin` to
+`WarmupEnd` interval. Frames with more submits narrow it.
+
+The frame boundary is `vkQueuePresentKHR` for a present-delimited capture and the end-of-frame marker for a
+capture that uses frame markers. Replay retires the warm-up at whichever one it reaches, so `WarmupEnd`
+always carries the `frame_index` of its matching `WarmupBegin`.
 
 ## Indexing and Sentinel Values
 
@@ -506,7 +532,7 @@ To add an event type, do these steps:
 | 1 | `QueueSubmitBegin`, `QueueSubmitEnd`, `FrameBegin`, `FrameEnd` | first public version |
 | 2 | `StateSetupBegin`, `StateSetupEnd` | state setup markers |
 | 3 | `WaitBegin`, `WaitEnd` | replay-requested delay markers |
-| 4 | `WarmupBegin`, `WarmupEnd` | frame warm-up dispatch markers |
+| 4 | `WarmupBegin`, `WarmupEnd` | frame warm-up dispatch markers; `WarmupEnd` reports fence-observed GPU completion |
 
 Add a row for each increase of `GFXR_REPLAY_PLUGIN_ABI_VERSION`.
 
