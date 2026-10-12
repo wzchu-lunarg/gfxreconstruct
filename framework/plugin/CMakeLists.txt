@@ -69,6 +69,21 @@ if(NOT ANDROID)
     common_build_directives(${TARGET_NAME})
 endif()
 
+# Arm Mali hardware counter plugin
+option(GFXRECON_ENABLE_GPU_COUNTERS_PLUGIN
+       "Build the Arm libGPUCounters replay event plugin. Needs an Arm Mali GPU at run time, so it \
+builds for Android and Linux only."
+       OFF)
+if(GFXRECON_ENABLE_GPU_COUNTERS_PLUGIN)
+    if(ANDROID OR CMAKE_SYSTEM_NAME MATCHES "Linux")
+        add_subdirectory(counter_recorder)
+    else()
+        message(FATAL_ERROR
+                "GFXRECON_ENABLE_GPU_COUNTERS_PLUGIN is ON, but libGPUCounters reads Arm Mali counters "
+                "through the Linux kernel driver and does not build for ${CMAKE_SYSTEM_NAME}.")
+    endif()
+endif()
+
 # Tests
 if(${RUN_TESTS})
     set(TEST_TARGET_NAME gfxrecon_replay_event_plugin_loader_test)
