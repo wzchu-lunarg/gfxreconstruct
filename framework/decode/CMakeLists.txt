@@ -293,6 +293,8 @@ target_sources(gfxrecon_decode
                     ${CMAKE_CURRENT_LIST_DIR}/vulkan_stage_queue_wait.cpp
                     ${CMAKE_CURRENT_LIST_DIR}/vulkan_stage_image_layout.h
                     ${CMAKE_CURRENT_LIST_DIR}/vulkan_stage_image_layout.cpp
+                    ${CMAKE_CURRENT_LIST_DIR}/vulkan_stage_frame_loop_fixup.h
+                    ${CMAKE_CURRENT_LIST_DIR}/vulkan_stage_frame_loop_fixup.cpp
                     ${CMAKE_CURRENT_LIST_DIR}/vulkan_submit_info_helper.h
                     ${CMAKE_CURRENT_LIST_DIR}/vulkan_submit_info_helper.cpp
                     ${CMAKE_CURRENT_LIST_DIR}/vulkan_submit_job.h
@@ -481,6 +483,7 @@ if (${RUN_TESTS})
             ${CMAKE_CURRENT_LIST_DIR}/test/test_vulkan_consumer_stage.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test/test_vulkan_consumer_stage_corpus.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test/test_vulkan_stage_isolate_render_pass.cpp
+            ${CMAKE_CURRENT_LIST_DIR}/test/test_vulkan_stage_frame_loop_fixup.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test/test_vulkan_stage_image_layout.cpp
             ${CMAKE_CURRENT_LIST_DIR}/test/test_vulkan_stage_queue_wait.cpp
             ${CMAKE_CURRENT_LIST_DIR}/../../tools/platform_debug_helper.cpp)
