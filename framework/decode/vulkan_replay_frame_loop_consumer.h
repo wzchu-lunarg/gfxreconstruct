@@ -55,8 +55,6 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
 
     void Process_vkCreateBuffer(const ApiCallInfo& call_info, args::CreateBuffer& args) override;
 
-    void Process_vkCreateImage(const ApiCallInfo& call_info, args::CreateImage& args) override;
-
     void Process_vkCreateCommandPool(const ApiCallInfo& call_info, args::CreateCommandPool& args) override;
 
     void Process_vkBeginCommandBuffer(const ApiCallInfo& call_info, args::BeginCommandBuffer& args) override;
@@ -306,82 +304,6 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
     void            ResetBufferTracking();
     void            ResetBufferTracking(format::HandleId device);
 
-    struct ImageTracking
-    {
-        ImageTracking(format::HandleId                         device_id,
-                      const graphics::VulkanDeviceTable&       device_table,
-                      CommonObjectInfoTable&                   object_table,
-                      std::shared_ptr<VulkanResourceAllocator> allocator,
-                      const VkPhysicalDeviceMemoryProperties*  memory_properties) :
-            device_id_(device_id),
-            device_table_(device_table), object_table_(object_table), allocator_(allocator),
-            memory_properties_(memory_properties)
-        {}
-
-        struct ImageState
-        {
-            graphics::ImageLayoutMap initial_layouts;
-
-            VkImage                               shadow_image{ VK_NULL_HANDLE };
-            VkDeviceMemory                        shadow_memory{ VK_NULL_HANDLE };
-            VulkanResourceAllocator::ResourceData alloc_data{ 0 };
-            VulkanResourceAllocator::MemoryData   mem_data{ 0 };
-
-            std::vector<VkImageSubresourceRange> copyable_ranges;
-
-            std::vector<VkImageSubresourceRange> excluded_ranges;
-
-            std::vector<VkImageCopy> copy_regions;
-
-            VkImageSubresourceRange shadow_range{};
-
-            bool HasShadow() const { return shadow_image != VK_NULL_HANDLE; }
-        };
-
-        struct RestoreCommands
-        {
-            // Puts every copyable subresource of each source image into VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL.
-            std::vector<VkImageMemoryBarrier> pre_barriers;
-
-            // Transitions subresources to their initial recorded layouts.
-            std::vector<VkImageMemoryBarrier> post_barriers;
-
-            // Images whose contents are copied back out of their shadow.
-            std::vector<format::HandleId> copy_ids;
-
-            std::vector<std::pair<format::HandleId, VkImageLayout>> layout_updates;
-
-            bool built{ false };
-        };
-
-        void RecordInitialState(const std::vector<format::HandleId>& image_ids,
-                                const std::vector<format::HandleId>& restorable_image_ids);
-
-        void Restore(format::HandleId queue);
-
-        void DestroyShadowImages();
-
-        bool CreateShadowImage(format::HandleId image_id, const VulkanImageInfo* image_info, ImageState& state);
-        void DestroyShadowImage(ImageState& state);
-
-        void BuildRestoreCommands();
-
-        format::HandleId                                 device_id_;
-        const graphics::VulkanDeviceTable&               device_table_;
-        CommonObjectInfoTable&                           object_table_;
-        std::shared_ptr<VulkanResourceAllocator>         allocator_;
-        const VkPhysicalDeviceMemoryProperties*          memory_properties_;
-        std::unordered_map<format::HandleId, ImageState> image_states_;
-        RestoreCommands                                  restore_commands_;
-    };
-
-    ImageTracking& GetImageTracking(format::HandleId device);
-    bool           CanSnapshotImageContents(const VulkanImageInfo* image_info) const;
-    void           TrackImageStates();
-    void           FixupDeviceImages(format::HandleId device, format::HandleId queue);
-    void           ResetImageTracking();
-    void           ResetImageTracking(format::HandleId device);
-
     // Private data
   private:
     graphics::FrameLoopInfo& frame_loop_info_;
@@ -401,10 +323,6 @@ class VulkanReplayFrameLoopConsumer : public VulkanReplayFrameLoopConsumerBase
     std::unordered_map<format::HandleId, EventTracking> per_device_event_tracking_;
 
     std::unordered_map<format::HandleId, BufferTracking> per_device_buffer_tracking_;
-
-    std::unordered_set<format::HandleId> restorable_images_;
-
-    std::unordered_map<format::HandleId, ImageTracking> per_device_image_tracking_;
 
     // Support for vkMapMemory/vkUnMapMemory
     std::set<format::HandleId> mapped_loop_memory;
